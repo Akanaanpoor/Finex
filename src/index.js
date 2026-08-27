@@ -779,12 +779,15 @@ const MINI_APP_HTML = `
     .icon-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 14px; border: 1px solid var(--border-1-c); }
 
     .settings-pop {
-      position: absolute; top: calc(100% + 8px); left: 0; z-index: 40;
+      position: absolute; top: calc(100% + 8px); inset-inline-end: 0; z-index: 40;
       width: 220px; border-radius: 20px; padding: 14px;
       background: var(--surface-2-c); border: 1px solid var(--border-1-c);
       box-shadow: 0 20px 40px rgba(0,0,0,0.35);
     }
     html.theme-light .settings-pop { box-shadow: 0 20px 40px rgba(0,0,0,0.12); }
+
+    .amount-sensitive { filter: blur(0px); transition: filter 0.15s ease; }
+    html.amounts-hidden .amount-sensitive { filter: blur(8px); user-select: none; }
 
     .badge-chip { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; opacity: 0.35; filter: grayscale(1); }
     .badge-chip.unlocked { opacity: 1; filter: none; }
@@ -835,15 +838,18 @@ const MINI_APP_HTML = `
 
       <div class="card-glass p-5 rounded-3xl relative overflow-hidden shadow-2xl fade-in">
         <div class="absolute -top-10 -left-10 w-32 h-32 bg-indigo-500/20 rounded-full blur-3xl"></div>
-        <span class="text-xs app-text-4 font-medium" data-i18n="netBalance">موجودی خالص</span>
-        <div id="balance-total" class="en-font text-3xl font-extrabold mt-1 tracking-tight text-emerald-400">$0.00</div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs app-text-4 font-medium" data-i18n="netBalance">موجودی خالص</span>
+          <button id="amount-visibility-btn" onclick="toggleAmountVisibility()" class="tap w-7 h-7 rounded-lg app-surface-1b app-text-4 flex items-center justify-center text-sm">👁️</button>
+        </div>
+        <div id="balance-total" class="amount-sensitive en-font text-3xl font-extrabold mt-1 tracking-tight text-emerald-400">$0.00</div>
 
         <div class="grid grid-cols-2 gap-3 mt-4 pt-4 border-t app-border-1">
           <div class="flex items-center gap-2.5">
             <div class="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold text-sm">↓</div>
             <div>
               <div class="text-[10px] app-text-4" data-i18n="totalIncome">مجموع درآمد</div>
-              <div id="income-total" class="en-font text-xs font-bold text-emerald-400 mt-0.5">$0.00</div>
+              <div id="income-total" class="amount-sensitive en-font text-xs font-bold text-emerald-400 mt-0.5">$0.00</div>
             </div>
           </div>
           <div class="flex items-center gap-2.5">
@@ -1230,6 +1236,7 @@ const MINI_APP_HTML = `
 
     let currentTheme = localStorage.getItem('ft_theme') || 'dark';
     let currentLang = localStorage.getItem('ft_lang') || 'fa';
+    let amountsHidden = localStorage.getItem('ft_amounts_hidden') === '1';
 
     let activeMainTab = 'dashboard';
     let records = [];
@@ -1258,6 +1265,19 @@ const MINI_APP_HTML = `
       currentTheme = theme;
       localStorage.setItem('ft_theme', theme);
       applyTheme();
+    }
+
+    // ---------- نمایش/مخفی‌سازی مبالغ ----------
+    function applyAmountVisibility() {
+      document.documentElement.classList.toggle('amounts-hidden', amountsHidden);
+      const btn = document.getElementById('amount-visibility-btn');
+      if (btn) btn.textContent = amountsHidden ? '🙈' : '👁️';
+    }
+
+    function toggleAmountVisibility() {
+      amountsHidden = !amountsHidden;
+      localStorage.setItem('ft_amounts_hidden', amountsHidden ? '1' : '0');
+      applyAmountVisibility();
     }
 
     // ---------- زبان ----------
@@ -2040,6 +2060,7 @@ const MINI_APP_HTML = `
     // ---------- راه‌اندازی اولیه ----------
     applyTheme();
     applyLanguage();
+    applyAmountVisibility();
     loadDashboardData();
   </script>
 </body>
