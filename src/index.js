@@ -791,7 +791,7 @@ const MINI_APP_HTML = `
 
     .badge-chip { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; opacity: 0.35; filter: grayscale(1); }
     .badge-chip.unlocked { opacity: 1; filter: none; }
-    .budget-row + .budget-row { margin-top: 10px; }
+    .budget-row + .budget-row { margin-top: 18px; }
   </style>
 </head>
 <body class="p-4 pb-28">
