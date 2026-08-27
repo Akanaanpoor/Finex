@@ -1573,15 +1573,18 @@ const MINI_APP_HTML = `
         top.appendChild(label);
         top.appendChild(amountSpan);
 
-        const track = document.createElement('div');
-        track.className = 'h-1.5 rounded-full bar-track overflow-hidden';
-        const bar = document.createElement('div');
-        bar.className = 'h-full rounded-full ' + (overLimit ? 'bg-rose-500' : (pct > 80 ? 'bg-amber-500' : 'bg-emerald-500'));
-        bar.style.width = (limit > 0 ? pct : 0) + '%';
-        track.appendChild(bar);
-
         row.appendChild(top);
-        row.appendChild(track);
+
+        if (limit > 0) {
+          const track = document.createElement('div');
+          track.className = 'h-1.5 rounded-full bar-track overflow-hidden';
+          const bar = document.createElement('div');
+          bar.className = 'h-full rounded-full ' + (overLimit ? 'bg-rose-500' : (pct > 80 ? 'bg-amber-500' : 'bg-emerald-500'));
+          bar.style.width = pct + '%';
+          track.appendChild(bar);
+          row.appendChild(track);
+        }
+
         container.appendChild(row);
       });
     }
