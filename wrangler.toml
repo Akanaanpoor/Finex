@@ -1,0 +1,26 @@
+name = "finance-tracker-bot"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# ─────────────────────────────────────────────────────────────
+# KV Namespace
+# The worker reads `env.PERSONALFIN` (falls back to `env.EXPENSE_KV`
+# if you already have a namespace bound under that name).
+# Create one with:
+#   npx wrangler kv namespace create PERSONALFIN
+# then paste the returned `id` below.
+# ─────────────────────────────────────────────────────────────
+[[kv_namespaces]]
+binding = "PERSONALFIN"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# ─────────────────────────────────────────────────────────────
+# Daily cron trigger for installment reminders.
+# Default: 17:30 UTC (≈ 21:00 Iran Standard Time) — edit to taste.
+# Cron syntax reference: https://developers.cloudflare.com/workers/configuration/cron-triggers/
+# ─────────────────────────────────────────────────────────────
+[triggers]
+crons = ["30 17 * * *"]
+
+# Secrets (NOT set here — see README):
+#   TELEGRAM_BOT_TOKEN  →  npx wrangler secret put TELEGRAM_BOT_TOKEN

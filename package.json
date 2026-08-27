@@ -1,0 +1,14 @@
+{
+  "name": "finance-tracker-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Telegram bot + Mini App for tracking income, expenses and installments (Shamsi calendar), built on Cloudflare Workers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
