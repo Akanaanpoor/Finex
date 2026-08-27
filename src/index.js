@@ -791,7 +791,7 @@ const MINI_APP_HTML = `
 
     .badge-chip { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; opacity: 0.35; filter: grayscale(1); }
     .badge-chip.unlocked { opacity: 1; filter: none; }
-    .budget-row + .budget-row { margin-top: 18px; }
+    .budget-row + .budget-row { padding-top: 18px; }
   </style>
 </head>
 <body class="p-4 pb-28">
@@ -1093,6 +1093,8 @@ const MINI_APP_HTML = `
       { id: 'shopping', icon: '🛍️', fa: 'خرید', en: 'Shopping' },
       { id: 'health', icon: '💊', fa: 'سلامت', en: 'Health' },
       { id: 'entertainment', icon: '🎬', fa: 'سرگرمی', en: 'Entertainment' },
+      { id: 'cafe', icon: '☕', fa: 'کافه', en: 'Cafe' },
+      { id: 'ai', icon: '🤖', fa: 'هوش مصنوعی', en: 'AI' },
       { id: 'salary', icon: '💼', fa: 'حقوق', en: 'Salary' },
       { id: 'other', icon: '📌', fa: 'سایر', en: 'Other' }
     ];
