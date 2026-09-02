@@ -17,6 +17,7 @@ Built by [@ArefKp](https://t.me/ArefKp).
 - **Daily logging streak & badges** — lightweight gamification based on how consistently you log transactions.
 - **Light/dark theme and a bilingual (Persian/English) interface**, both persisted per device.
 - **Instant chat report** — send `گزارش` (or `/report`) to the bot for a full financial summary, no need to open the app.
+- **Reports tab** — a line chart comparing this month's cumulative income/expense against the same days last month, plus a simple end-of-month forecast based on your average daily pace so far.
 - **Efficient reminder cron** — a single lightweight index is read once a day rather than querying every user's data, so it stays well within Cloudflare's free-tier limits even as the user base grows.
 
 ## 🧱 Tech stack
@@ -107,7 +108,7 @@ Use `type=income` for a second shortcut to log income. `<your-telegram-id>` is y
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/app` | GET | Serves the Mini App |
-| `/api/transactions` | GET | List a user's transactions |
+| `/api/transactions` | GET | List a user's transactions for the current month (or a specific month via `?month=YYYY-MM`) |
 | `/api/add` | POST | Add a transaction |
 | `/api/update` | POST | Edit a transaction |
 | `/api/delete` | POST | Delete a transaction |
@@ -119,6 +120,7 @@ Use `type=income` for a second shortcut to log income. `<your-telegram-id>` is y
 | `/api/installments/pay` | POST | Mark an installment paid (also logs an expense) |
 | `/api/budgets` | GET / POST | Read or set per-category monthly budget limits |
 | `/api/summary` | GET | Balance, income, expense, and the financial forecast |
+| `/api/reports` | GET | Daily/cumulative income & expense series for this month vs. last month, plus an end-of-month forecast |
 | `/set-webhook` | GET | Registers the Telegram webhook to this Worker |
 
 All endpoints (except `/set-webhook` and the Telegram webhook handler) take/return JSON and expect a `userId` — the caller's Telegram user ID.

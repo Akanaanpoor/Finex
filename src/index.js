@@ -1967,6 +1967,111 @@ const MINI_APP_HTML = `
       });
     }
 
+    let reportsChartInstance = null;
+
+    async function loadReportsData() {
+      try {
+        const res = await fetch(BASE_URL + '/api/reports?userId=' + currentUserId);
+        const data = await res.json();
+        renderReportsChart(data);
+      } catch (err) {
+        document.getElementById('reports-empty-state').classList.remove('hidden');
+        document.getElementById('reports-empty-state').textContent = t('loadErrDash');
+      }
+    }
+
+    function renderReportsChart(data) {
+      const cur = data.currentMonth;
+      const prev = data.previousMonth;
+      const forecast = data.forecast;
+
+      const hasAnyData = (cur.cumulativeIncome.some(function(v) { return v > 0; })) ||
+                          (cur.cumulativeExpense.some(function(v) { return v > 0; })) ||
+                          (prev.cumulativeIncome.some(function(v) { return v > 0; })) ||
+                          (prev.cumulativeExpense.some(function(v) { return v > 0; }));
+      document.getElementById('reports-empty-state').classList.toggle('hidden', hasAnyData);
+      document.getElementById('reports-empty-state').textContent = t('reportsNoDataYet');
+
+      const labels = [];
+      const maxLen = Math.max(cur.totalDays, prev.totalDays);
+      for (let i = 1; i <= maxLen; i++) labels.push(String(i));
+
+      const padToLength = function(arr, len) {
+        const out = arr.slice();
+        while (out.length < len) out.push(null);
+        return out;
+      };
+
+      const ctx = document.getElementById('reportsChart').getContext('2d');
+      if (reportsChartInstance) reportsChartInstance.destroy();
+      reportsChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: t('reportsChartLegendIncome'),
+              data: padToLength(cur.cumulativeIncome, maxLen),
+              borderColor: '#10b981',
+              backgroundColor: 'transparent',
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendExpense'),
+              data: padToLength(cur.cumulativeExpense, maxLen),
+              borderColor: '#f43f5e',
+              backgroundColor: 'transparent',
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendIncomePrev'),
+              data: padToLength(prev.cumulativeIncome, maxLen),
+              borderColor: '#10b981',
+              backgroundColor: 'transparent',
+              borderDash: [4, 4],
+              borderWidth: 1,
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendExpensePrev'),
+              data: padToLength(prev.cumulativeExpense, maxLen),
+              borderColor: '#f43f5e',
+              backgroundColor: 'transparent',
+              borderDash: [4, 4],
+              borderWidth: 1,
+              tension: 0.3,
+              pointRadius: 0
+            }
+          ]
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#9ca3af', maxTicksLimit: 8 }, grid: { display: false } },
+            y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(156,163,175,0.1)' } }
+          },
+          interaction: { intersect: false, mode: 'index' }
+        }
+      });
+
+      document.getElementById('reports-forecast-income').textContent = fmtToman(forecast.projectedIncome);
+      document.getElementById('reports-forecast-expense').textContent = fmtToman(forecast.projectedExpense);
+      document.getElementById('reports-forecast-balance').textContent = fmtToman(forecast.projectedBalance);
+
+      const prevExpenseTotal = prev.cumulativeExpense.length ? prev.cumulativeExpense[prev.cumulativeExpense.length - 1] : 0;
+      const vsLastMonthEl = document.getElementById('reports-vs-last-month');
+      if (prevExpenseTotal > 0) {
+        const pctChange = Math.round(((forecast.projectedExpense - prevExpenseTotal) / prevExpenseTotal) * 100);
+        const sign = pctChange > 0 ? '+' : '';
+        vsLastMonthEl.textContent = t('reportsVsLastMonth') + ': ' + sign + pctChange + '%';
+      } else {
+        vsLastMonthEl.textContent = '';
+      }
+    }
+
     function setFilter(filter) {
       activeFilter = filter;
       ['all', 'expense', 'income'].forEach(function(f) {
