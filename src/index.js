@@ -600,7 +600,16 @@ async function ensureMigrated(kv, userId) {
 
   const byMonth = {};
   for (const record of legacyList) {
-    const mKey = monthKeyOf(new Date(record.date));
+    let mKey;
+    try {
+      const d = new Date(record && record.date);
+      if (isNaN(d.getTime())) throw new Error('invalid date');
+      mKey = monthKeyOf(d);
+    } catch (e) {
+      // تاریخ رکورد نامعتبر/غایب است: به‌جای حذف رکورد، آن را در یک سطل ثابت
+      // (sentinel) نگه می‌داریم تا هیچ داده‌ای از دست نرود.
+      mKey = 'unknown-date';
+    }
     if (!byMonth[mKey]) byMonth[mKey] = [];
     byMonth[mKey].push(record);
   }
