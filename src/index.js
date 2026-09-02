@@ -45,10 +45,13 @@ export default {
         date: new Date().toISOString()
       };
 
-      const raw = await kv.get(`user_${userId}`);
+      await ensureMigrated(kv, userId);
+      const monthKey = monthKeyOf(new Date(newRecord.date));
+      const raw = await kv.get(`user_${userId}_${monthKey}`);
       let list = raw ? JSON.parse(raw) : [];
       list.unshift(newRecord);
-      await kv.put(`user_${userId}`, JSON.stringify(list));
+      await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+      await addMonthToIndex(kv, userId, monthKey);
 
       await saveUserIndex(kv, userId);
 
@@ -89,7 +92,11 @@ export default {
     if (url.pathname === '/api/transactions' && request.method === 'GET') {
       const userId = url.searchParams.get('userId') || 'guest_user';
       try {
-        const raw = await kv.get(`user_${userId}`);
+        await ensureMigrated(kv, userId);
+        const requestedMonth = url.searchParams.get('month');
+        const isValidMonthParam = requestedMonth && (/^\d{4}-\d{2}$/.test(requestedMonth) || requestedMonth === 'unknown-date');
+        const monthKey = isValidMonthParam ? requestedMonth : monthKeyOf(new Date());
+        const raw = await kv.get(`user_${userId}_${monthKey}`);
         return Response.json(raw ? JSON.parse(raw) : [], { headers: corsHeaders });
       } catch (err) {
         return Response.json([], { headers: corsHeaders });
@@ -100,6 +107,7 @@ export default {
       try {
         const { userId, type, amount, description } = await request.json();
         const targetUser = userId || 'guest_user';
+        await ensureMigrated(kv, targetUser);
         const numAmount = parseFloat(String(amount).replace(/,/g, '')) || 0;
         const newRecord = {
           id: Date.now().toString(),
@@ -108,10 +116,12 @@ export default {
           description: (description || 'General').trim(),
           date: new Date().toISOString()
         };
-        const raw = await kv.get(`user_${targetUser}`);
+        const monthKey = monthKeyOf(new Date(newRecord.date));
+        const raw = await kv.get(`user_${targetUser}_${monthKey}`);
         let list = raw ? JSON.parse(raw) : [];
         list.unshift(newRecord);
-        await kv.put(`user_${targetUser}`, JSON.stringify(list));
+        await kv.put(`user_${targetUser}_${monthKey}`, JSON.stringify(list));
+        await addMonthToIndex(kv, targetUser, monthKey);
         await saveUserIndex(kv, targetUser);
         return Response.json({ success: true, item: newRecord }, { headers: corsHeaders });
       } catch (err) {
@@ -121,11 +131,28 @@ export default {
 
     if (url.pathname === '/api/delete' && request.method === 'POST') {
       try {
-        const { id, userId } = await request.json();
-        const raw = await kv.get(`user_${userId}`);
-        let list = raw ? JSON.parse(raw) : [];
-        list = list.filter(item => item.id !== id);
-        await kv.put(`user_${userId}`, JSON.stringify(list));
+        const { id, userId, month } = await request.json();
+        await ensureMigrated(kv, userId);
+        const baseMonthKey = month || monthKeyOf(new Date());
+        // اول در ماه اعلام‌شده توسط کلاینت جست‌وجو کن؛ اگر پیدا نشد (مثلاً به‌خاطر یک
+        // کلید ماه قدیمی/نادرست در سمت کلاینت) دو ماه همسایه را هم به‌عنوان راه‌حل
+        // پشتیبان امتحان کن، قبل از این‌که واقعاً شکست را گزارش کنیم.
+        const candidateMonths = [baseMonthKey, shiftMonthKey(baseMonthKey, 1), shiftMonthKey(baseMonthKey, -1)];
+        let found = false;
+        for (const monthKey of candidateMonths) {
+          const raw = await kv.get(`user_${userId}_${monthKey}`);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const filtered = list.filter(item => item.id !== id);
+          if (filtered.length !== list.length) {
+            await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(filtered));
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return Response.json({ success: false, error: 'Transaction not found' }, { status: 404, headers: corsHeaders });
+        }
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
         return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
@@ -134,13 +161,27 @@ export default {
 
     if (url.pathname === '/api/update' && request.method === 'POST') {
       try {
-        const { id, amount, description, type, userId } = await request.json();
-        const raw = await kv.get(`user_${userId}`);
-        let list = raw ? JSON.parse(raw) : [];
-        const idx = list.findIndex(item => item.id === id);
-        if (idx !== -1) {
-          list[idx] = { ...list[idx], amount: Math.abs(parseFloat(amount) || 0), description, type };
-          await kv.put(`user_${userId}`, JSON.stringify(list));
+        const { id, amount, description, type, userId, month } = await request.json();
+        await ensureMigrated(kv, userId);
+        const baseMonthKey = month || monthKeyOf(new Date());
+        // اول در ماه اعلام‌شده توسط کلاینت جست‌وجو کن؛ اگر پیدا نشد دو ماه همسایه را هم
+        // امتحان کن (نگاه کن به توضیح مشابه در /api/delete بالا).
+        const candidateMonths = [baseMonthKey, shiftMonthKey(baseMonthKey, 1), shiftMonthKey(baseMonthKey, -1)];
+        let found = false;
+        for (const monthKey of candidateMonths) {
+          const raw = await kv.get(`user_${userId}_${monthKey}`);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const idx = list.findIndex(item => item.id === id);
+          if (idx !== -1) {
+            list[idx] = { ...list[idx], amount: Math.abs(parseFloat(amount) || 0), description, type };
+            await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return Response.json({ success: false, error: 'Transaction not found' }, { status: 404, headers: corsHeaders });
         }
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
@@ -263,10 +304,13 @@ export default {
           date: new Date().toISOString()
         };
 
-        const rawTx = await kv.get(`user_${userId}`);
+        await ensureMigrated(kv, userId);
+        const txMonthKey = monthKeyOf(new Date(txRecord.date));
+        const rawTx = await kv.get(`user_${userId}_${txMonthKey}`);
         let txList = rawTx ? JSON.parse(rawTx) : [];
         txList.unshift(txRecord);
-        await kv.put(`user_${userId}`, JSON.stringify(txList));
+        await kv.put(`user_${userId}_${txMonthKey}`, JSON.stringify(txList));
+        await addMonthToIndex(kv, userId, txMonthKey);
         await kv.put(`installments_${userId}`, JSON.stringify(instList));
         await upsertInstallmentIndex(kv, userId, inst);
 
@@ -317,6 +361,64 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/reports' && request.method === 'GET') {
+      const userId = url.searchParams.get('userId') || 'guest_user';
+      try {
+        await ensureMigrated(kv, userId);
+        const now = new Date();
+        const nowP = toPersianDate(now);
+        const currentKey = cycleKey(nowP);
+        const prevKey = shiftMonthKey(currentKey, -1);
+
+        const [currentRaw, prevRaw] = await Promise.all([
+          kv.get(`user_${userId}_${currentKey}`),
+          kv.get(`user_${userId}_${prevKey}`)
+        ]);
+        const currentRecords = currentRaw ? JSON.parse(currentRaw) : [];
+        const prevRecords = prevRaw ? JSON.parse(prevRaw) : [];
+
+        const daysElapsed = nowP.day;
+        const totalDaysCurrent = daysInPersianMonth(now);
+        const prevMonthProbeDate = new Date(now.getTime() - daysElapsed * 86400000);
+        const totalDaysPrev = daysInPersianMonth(prevMonthProbeDate);
+        const prevMonthLabel = PERSIAN_MONTHS[toPersianDate(prevMonthProbeDate).month - 1];
+
+        const currentBuckets = bucketDaily(currentRecords, daysElapsed);
+        const prevBuckets = bucketDaily(prevRecords, totalDaysPrev);
+
+        const incomeSoFar = daysElapsed > 0 ? currentBuckets.cumulativeIncome[daysElapsed - 1] : 0;
+        const expenseSoFar = daysElapsed > 0 ? currentBuckets.cumulativeExpense[daysElapsed - 1] : 0;
+        const projectedIncome = daysElapsed > 0 ? (incomeSoFar / daysElapsed) * totalDaysCurrent : 0;
+        const projectedExpense = daysElapsed > 0 ? (expenseSoFar / daysElapsed) * totalDaysCurrent : 0;
+
+        return Response.json({
+          currentMonth: {
+            label: PERSIAN_MONTHS[nowP.month - 1],
+            totalDays: daysElapsed,
+            dailyIncome: currentBuckets.dailyIncome,
+            dailyExpense: currentBuckets.dailyExpense,
+            cumulativeIncome: currentBuckets.cumulativeIncome,
+            cumulativeExpense: currentBuckets.cumulativeExpense
+          },
+          previousMonth: {
+            label: prevMonthLabel,
+            totalDays: totalDaysPrev,
+            dailyIncome: prevBuckets.dailyIncome,
+            dailyExpense: prevBuckets.dailyExpense,
+            cumulativeIncome: prevBuckets.cumulativeIncome,
+            cumulativeExpense: prevBuckets.cumulativeExpense
+          },
+          forecast: {
+            projectedIncome: Math.round(projectedIncome),
+            projectedExpense: Math.round(projectedExpense),
+            projectedBalance: Math.round(projectedIncome - projectedExpense)
+          }
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     // و) پردازش پیام‌های ورودی تلگرام
     if (request.method === 'POST') {
       try {
@@ -359,10 +461,13 @@ export default {
             date: new Date().toISOString()
           };
 
-          const raw = await kv.get(`user_${userId}`);
+          await ensureMigrated(kv, userId);
+          const txMonthKey = monthKeyOf(new Date(newRecord.date));
+          const raw = await kv.get(`user_${userId}_${txMonthKey}`);
           let userTransactions = raw ? JSON.parse(raw) : [];
           userTransactions.unshift(newRecord);
-          await kv.put(`user_${userId}`, JSON.stringify(userTransactions));
+          await kv.put(`user_${userId}_${txMonthKey}`, JSON.stringify(userTransactions));
+          await addMonthToIndex(kv, userId, txMonthKey);
           await saveUserIndex(kv, userId);
 
           const persianDate = getPersianFormattedDate(new Date());
@@ -523,6 +628,135 @@ async function removeFromInstallmentIndex(kv, userId, id) {
   } catch (e) {}
 }
 
+// کلید ماه شمسی یک تاریخ، به‌صورت "YYYY-MM" (برای نام‌گذاری کلیدهای KV تراکنش‌های ماهانه)
+function monthKeyOf(date) {
+  return cycleKey(toPersianDate(date));
+}
+
+// جابه‌جایی یک کلید ماه (YYYY-MM) به تعداد delta ماه (مثبت یا منفی)، با پوشش تغییر سال
+function shiftMonthKey(monthKey, delta) {
+  const parts = monthKey.split('-');
+  let y = parseInt(parts[0], 10);
+  let m = parseInt(parts[1], 10) + delta;
+  while (m > 12) { m -= 12; y += 1; }
+  while (m < 1) { m += 12; y -= 1; }
+  return y + '-' + String(m).padStart(2, '0');
+}
+
+// تعداد روزهای ماه شمسی‌ای که تاریخ داده‌شده در آن قرار دارد (۲۹ تا ۳۱، با پوشش سال کبیسه)
+// با پیمایش روز‌به‌روز حول تاریخ ورودی محاسبه می‌شود تا نیازی به پیاده‌سازی جداگانه‌ی قانون کبیسه‌ی شمسی نباشد
+function daysInPersianMonth(dateInThatMonth) {
+  const target = toPersianDate(dateInThatMonth);
+  // برگرد عقب تا روز اول همان ماه شمسی
+  let firstOfMonth = new Date(dateInThatMonth.getTime());
+  while (true) {
+    const prevDay = new Date(firstOfMonth.getTime() - 86400000);
+    const prevP = toPersianDate(prevDay);
+    if (prevP.month !== target.month || prevP.year !== target.year) break;
+    firstOfMonth = prevDay;
+  }
+  // از روز اول جلو بشمار تا ماه عوض شود
+  let count = 0;
+  let probe = firstOfMonth;
+  while (true) {
+    const p = toPersianDate(probe);
+    if (p.month !== target.month || p.year !== target.year) break;
+    count++;
+    probe = new Date(probe.getTime() + 86400000);
+  }
+  return count;
+}
+
+// افزودن یک کلید ماه به ایندکس ماه‌های کاربر (اگر از قبل نبود)، مرتب‌شده و بدون تکرار
+async function addMonthToIndex(kv, userId, monthKey) {
+  const raw = await kv.get(`user_index_${userId}`);
+  let months = raw ? JSON.parse(raw) : [];
+  if (!months.includes(monthKey)) {
+    months.push(monthKey);
+    months.sort();
+    await kv.put(`user_index_${userId}`, JSON.stringify(months));
+  }
+}
+
+// مهاجرت یک‌باره و ایمن از کلید قدیمی تک‌آرایه‌ای (user_{userId}) به کلیدهای ماهانه.
+// idempotent: اگر user_index_{userId} از قبل موجود باشد (حتی آرایه‌ی خالی)، بلافاصله برمی‌گردد
+// و هیچ کاری انجام نمی‌دهد - یعنی اجرای مکرر یا نیمه‌کاره هرگز داده را تکراری یا گم نمی‌کند.
+// کلید قدیمی فقط پس از موفقیت کامل نوشتن تمام کلیدهای ماهانه + ایندکس حذف می‌شود.
+async function ensureMigrated(kv, userId) {
+  const existingIndex = await kv.get(`user_index_${userId}`);
+  if (existingIndex !== null) return; // قبلاً مهاجرت شده
+
+  const legacyRaw = await kv.get(`user_${userId}`);
+  if (!legacyRaw) {
+    // شاید داده‌ی این کاربر قبلاً به کلیدهای ماهانه مهاجرت کرده اما ایندکس ثبت نشده
+    // (مثلاً یک اجرای قبلی که کلید قدیمی را حذف کرده بود). قبل از نوشتن ایندکس خالی،
+    // کلیدهای ماهانه‌ی موجود را پیدا و ایندکس را از روی آن‌ها بازسازی کن.
+    const rebuiltMonths = await listExistingMonthKeys(kv, userId);
+    await kv.put(`user_index_${userId}`, JSON.stringify(rebuiltMonths));
+    return;
+  }
+
+  let legacyList;
+  try {
+    legacyList = JSON.parse(legacyRaw);
+    if (!Array.isArray(legacyList)) legacyList = [];
+  } catch (e) {
+    // داده‌ی قدیمی خراب/غیرقابل‌خواندن است: کلید قدیمی را دست‌نخورده نگه می‌داریم
+    // (برای بازیابی دستی بعدی) و فقط با ایندکس خالی کار برنامه را ادامه می‌دهیم.
+    console.error(`ensureMigrated: corrupt legacy JSON for userId=${userId}, continuing with empty index`);
+    await kv.put(`user_index_${userId}`, JSON.stringify([]));
+    return;
+  }
+
+  const byMonth = {};
+  for (const record of legacyList) {
+    let mKey;
+    try {
+      const d = new Date(record && record.date);
+      if (isNaN(d.getTime())) throw new Error('invalid date');
+      mKey = monthKeyOf(d);
+    } catch (e) {
+      // تاریخ رکورد نامعتبر/غایب است: به‌جای حذف رکورد، آن را در یک سطل ثابت
+      // (sentinel) نگه می‌داریم تا هیچ داده‌ای از دست نرود.
+      mKey = 'unknown-date';
+    }
+    if (!byMonth[mKey]) byMonth[mKey] = [];
+    byMonth[mKey].push(record);
+  }
+
+  const monthKeys = Object.keys(byMonth).sort();
+  for (const mKey of monthKeys) {
+    await kv.put(`user_${userId}_${mKey}`, JSON.stringify(byMonth[mKey]));
+  }
+  await kv.put(`user_index_${userId}`, JSON.stringify(monthKeys));
+  // نکته: کلید قدیمی (user_{userId}) عمداً حذف نمی‌شود. حذف نکردن آن باعث می‌شود
+  // اجرای هم‌زمان این تابع برای همان کاربر (که در KV بدون تراکنش/قفل رخ می‌دهد) کاملاً
+  // idempotent بماند: هر اجرای هم‌زمان همان داده‌ی قدیمی را می‌خواند و همان نتیجه را
+  // می‌نویسد، پس رقابت بین دو نویسنده دیگر باعث گم‌شدن داده نمی‌شود. این کلید هم‌چنین
+  // به‌عنوان یک نسخه‌ی پشتیبان برای rollback احتمالی باقی می‌ماند.
+  console.log(`ensureMigrated: migrated userId=${userId}, records=${legacyList.length}, months=${monthKeys.length}`);
+  if (byMonth['unknown-date']) {
+    console.log(`ensureMigrated: userId=${userId} has ${byMonth['unknown-date'].length} record(s) with unparsable dates, bucketed under 'unknown-date'`);
+  }
+}
+
+// پیدا کردن کلیدهای ماهانه‌ی موجود یک کاربر در KV (با صفحه‌بندی) و برگرداندن نام ماه‌ها
+// به‌صورت آرایه‌ی مرتب‌شده. برای بازسازی ایندکس وقتی خودِ ایندکس گم شده استفاده می‌شود.
+async function listExistingMonthKeys(kv, userId) {
+  const prefix = `user_${userId}_`;
+  const months = [];
+  let cursor;
+  do {
+    const page = await kv.list({ prefix, cursor });
+    for (const key of page.keys) {
+      months.push(key.name.slice(prefix.length));
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  months.sort();
+  return months;
+}
+
 function convertPersianDigits(str) {
   return String(str)
     .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
@@ -539,7 +773,7 @@ function getPersianFormattedDate(date) {
 
 // استخراج سال/ماه/روز شمسی به‌صورت عددی (لاتین) برای محاسبات داخلی
 function toPersianDate(date) {
-  const fmt = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric' });
+  const fmt = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'Asia/Tehran' });
   const parts = fmt.formatToParts(date);
   const map = {};
   for (const p of parts) {
@@ -602,18 +836,49 @@ async function sendTelegramMessage(token, chatId, htmlText, webAppUrl) {
   });
 }
 
-// موجودی فعلی + اقساط باقیمانده‌ی این ماه + موجودی پیش‌بینی‌شده پس از پرداخت آن‌ها
+// گروه‌بندی روزانه‌ی یک لیست تراکنش بر اساس روز-از-ماه، به همراه سری تجمعی
+// totalDays طول آرایه‌های خروجی را تعیین می‌کند (برای ماه جاری: تا امروز، برای ماه قبل: کل ماه)
+function bucketDaily(records, totalDays) {
+  const dailyIncome = new Array(totalDays).fill(0);
+  const dailyExpense = new Array(totalDays).fill(0);
+  for (const r of records) {
+    const day = toPersianDate(new Date(r.date)).day;
+    const idx = day - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= totalDays) continue;
+    const amt = Number(r.amount) || 0;
+    if (r.type === 'income') dailyIncome[idx] += amt;
+    else if (r.type === 'expense') dailyExpense[idx] += amt;
+  }
+  const cumulativeIncome = [];
+  const cumulativeExpense = [];
+  let ci = 0, ce = 0;
+  for (let i = 0; i < totalDays; i++) {
+    ci += dailyIncome[i];
+    ce += dailyExpense[i];
+    cumulativeIncome.push(ci);
+    cumulativeExpense.push(ce);
+  }
+  return { dailyIncome, dailyExpense, cumulativeIncome, cumulativeExpense };
+}
+
+// موجودی فعلی (جمع تمام تاریخچه‌ی کاربر از روی ایندکس ماهانه) + اقساط باقیمانده‌ی این ماه
+// + موجودی پیش‌بینی‌شده پس از پرداخت آن‌ها
 async function computeSummary(kv, userId) {
-  const rawTx = await kv.get(`user_${userId}`);
+  await ensureMigrated(kv, userId);
+  const rawIndex = await kv.get(`user_index_${userId}`);
+  const monthKeys = rawIndex ? JSON.parse(rawIndex) : [];
   const rawInst = await kv.get(`installments_${userId}`);
-  const records = rawTx ? JSON.parse(rawTx) : [];
   const installments = rawInst ? JSON.parse(rawInst) : [];
 
   let income = 0, expense = 0;
-  for (const r of records) {
-    const amt = Number(r.amount) || 0;
-    if (r.type === 'income') income += amt;
-    else if (r.type === 'expense') expense += amt;
+  const monthlyRaws = await Promise.all(monthKeys.map(mKey => kv.get(`user_${userId}_${mKey}`)));
+  for (const raw of monthlyRaws) {
+    const monthRecords = raw ? JSON.parse(raw) : [];
+    for (const r of monthRecords) {
+      const amt = Number(r.amount) || 0;
+      if (r.type === 'income') income += amt;
+      else if (r.type === 'expense') expense += amt;
+    }
   }
   const balance = income - expense;
 
@@ -828,9 +1093,10 @@ const MINI_APP_HTML = `
       </div>
     </div>
 
-    <div class="grid grid-cols-3 app-surface-nav p-1 rounded-2xl border app-border-1 text-xs font-bold">
+    <div class="grid grid-cols-4 app-surface-nav p-1 rounded-2xl border app-border-1 text-xs font-bold">
       <button onclick="switchMainTab('dashboard')" id="nav-dash" class="tap py-2.5 rounded-xl bg-indigo-600 text-white transition shadow-lg">📊 <span data-i18n="navDashboard">داشبورد</span></button>
       <button onclick="switchMainTab('installments')" id="nav-inst" class="tap py-2.5 rounded-xl app-text-4 transition">🗓 <span data-i18n="navInstallments">اقساط</span></button>
+      <button onclick="switchMainTab('reports')" id="nav-reports" class="tap py-2.5 rounded-xl app-text-4 transition">📈 <span data-i18n="navReports">گزارشات</span></button>
       <button onclick="switchMainTab('about')" id="nav-about" class="tap py-2.5 rounded-xl app-text-4 transition">✨ <span data-i18n="navAbout">درباره</span></button>
     </div>
 
@@ -950,6 +1216,41 @@ const MINI_APP_HTML = `
           <span id="inst-count" class="text-[11px] app-text-5">۰ مورد</span>
         </div>
         <div id="inst-container" class="space-y-2"></div>
+      </div>
+    </div>
+
+    <div id="tab-reports-view" class="space-y-4 hidden">
+      <div class="card-glass p-5 rounded-3xl fade-in">
+        <div class="text-xs font-bold app-text-4 uppercase tracking-wider mb-3" data-i18n="reportsTitle">روند درآمد و هزینه</div>
+        <div id="reports-empty-state" class="hidden text-center text-xs app-text-4 py-8" data-i18n="reportsNoDataYet">هنوز داده‌ای برای این ماه ثبت نشده.</div>
+        <div id="reports-chart-wrap" style="height: 220px;">
+          <canvas id="reportsChart"></canvas>
+        </div>
+        <div class="flex flex-wrap gap-3 mt-3 text-[10px] app-text-4">
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#10b981"></span><span data-i18n="reportsChartLegendIncome">درآمد (این ماه)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#f43f5e"></span><span data-i18n="reportsChartLegendExpense">هزینه (این ماه)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block opacity-50" style="background:#10b981"></span><span data-i18n="reportsChartLegendIncomePrev">درآمد (ماه قبل)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block opacity-50" style="background:#f43f5e"></span><span data-i18n="reportsChartLegendExpensePrev">هزینه (ماه قبل)</span></span>
+        </div>
+      </div>
+
+      <div class="card-glass p-5 rounded-3xl fade-in">
+        <div class="text-xs font-bold app-text-4 uppercase tracking-wider mb-3" data-i18n="reportsForecastTitle">پیش‌بینی ته ماه</div>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastIncome">درآمد</div>
+            <div id="reports-forecast-income" class="amount-sensitive text-sm font-extrabold text-emerald-400 en-font mt-1">-</div>
+          </div>
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastExpense">هزینه</div>
+            <div id="reports-forecast-expense" class="amount-sensitive text-sm font-extrabold text-rose-400 en-font mt-1">-</div>
+          </div>
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastBalance">موجودی</div>
+            <div id="reports-forecast-balance" class="amount-sensitive text-sm font-extrabold app-text-1 en-font mt-1">-</div>
+          </div>
+        </div>
+        <div id="reports-vs-last-month" class="text-center text-[10px] app-text-4 mt-3"></div>
       </div>
     </div>
 
@@ -1118,7 +1419,12 @@ const MINI_APP_HTML = `
     const I18N = {
       fa: {
         accountLabel: 'حساب کاربری', addBtn: 'افزودن', themeLabel: 'پوسته', themeDark: 'تیره', themeLight: 'روشن',
-        langLabel: 'زبان', navDashboard: 'داشبورد', navInstallments: 'اقساط', navAbout: 'درباره',
+        langLabel: 'زبان', navDashboard: 'داشبورد', navInstallments: 'اقساط', navReports: 'گزارشات', navAbout: 'درباره',
+        reportsTitle: 'روند درآمد و هزینه', reportsNoDataYet: 'هنوز داده‌ای برای این ماه ثبت نشده.',
+        reportsChartLegendIncome: 'درآمد (این ماه)', reportsChartLegendExpense: 'هزینه (این ماه)',
+        reportsChartLegendIncomePrev: 'درآمد (ماه قبل)', reportsChartLegendExpensePrev: 'هزینه (ماه قبل)',
+        reportsForecastTitle: 'پیش‌بینی ته ماه', reportsForecastIncome: 'درآمد', reportsForecastExpense: 'هزینه', reportsForecastBalance: 'موجودی',
+        reportsVsLastMonth: 'نسبت به ماه قبل',
         netBalance: 'موجودی خالص', totalIncome: 'مجموع درآمد', totalExpense: 'مجموع هزینه',
         incomeShort: 'درآمد', expenseShort: 'هزینه',
         streakTitle: '🔥 استریک ثبت روزانه',
@@ -1170,7 +1476,12 @@ const MINI_APP_HTML = `
       },
       en: {
         accountLabel: 'Account', addBtn: 'Add', themeLabel: 'Theme', themeDark: 'Dark', themeLight: 'Light',
-        langLabel: 'Language', navDashboard: 'Dashboard', navInstallments: 'Installments', navAbout: 'About',
+        langLabel: 'Language', navDashboard: 'Dashboard', navInstallments: 'Installments', navReports: 'Reports', navAbout: 'About',
+        reportsTitle: 'Income & Expense Trend', reportsNoDataYet: 'No data recorded yet for this month.',
+        reportsChartLegendIncome: 'Income (this month)', reportsChartLegendExpense: 'Expense (this month)',
+        reportsChartLegendIncomePrev: 'Income (last month)', reportsChartLegendExpensePrev: 'Expense (last month)',
+        reportsForecastTitle: 'End-of-month forecast', reportsForecastIncome: 'Income', reportsForecastExpense: 'Expense', reportsForecastBalance: 'Balance',
+        reportsVsLastMonth: 'vs. last month',
         netBalance: 'Net Balance', totalIncome: 'Total Income', totalExpense: 'Total Expense',
         incomeShort: 'Income', expenseShort: 'Expense',
         streakTitle: '🔥 Daily Logging Streak',
@@ -1242,6 +1553,7 @@ const MINI_APP_HTML = `
 
     let activeMainTab = 'dashboard';
     let records = [];
+    let previousMonthRecords = [];
     let installments = [];
     let summary = null;
     let budgetLimits = {};
@@ -1309,6 +1621,7 @@ const MINI_APP_HTML = `
       populateCategorySelect();
       if (records.length || summary) renderDashboard();
       if (installments.length) renderInstallments();
+      if (activeMainTab === 'reports' && lastReportsData) renderReportsChart(lastReportsData);
     }
 
     function setLang(lang) {
@@ -1378,8 +1691,8 @@ const MINI_APP_HTML = `
       return base + ' #' + categoryId;
     }
 
-    const TAB_NAV_IDS = { dashboard: 'nav-dash', installments: 'nav-inst', about: 'nav-about' };
-    const TAB_VIEW_IDS = { dashboard: 'tab-dashboard-view', installments: 'tab-installments-view', about: 'tab-about-view' };
+    const TAB_NAV_IDS = { dashboard: 'nav-dash', installments: 'nav-inst', reports: 'nav-reports', about: 'nav-about' };
+    const TAB_VIEW_IDS = { dashboard: 'tab-dashboard-view', installments: 'tab-installments-view', reports: 'tab-reports-view', about: 'tab-about-view' };
 
     function switchMainTab(tab) {
       activeMainTab = tab;
@@ -1395,8 +1708,9 @@ const MINI_APP_HTML = `
         }
       });
       const addBtn = document.getElementById('top-add-btn');
-      addBtn.style.visibility = (tab === 'about') ? 'hidden' : 'visible';
+      addBtn.style.visibility = (tab === 'about' || tab === 'reports') ? 'hidden' : 'visible';
       if (tab === 'installments') loadInstallmentsData();
+      if (tab === 'reports') loadReportsData();
     }
 
     function handleTopAddButton() {
@@ -1406,6 +1720,7 @@ const MINI_APP_HTML = `
 
     function refreshCurrentTab() {
       if (activeMainTab === 'dashboard') loadDashboardData();
+      else if (activeMainTab === 'reports') loadReportsData();
       else loadInstallmentsData();
     }
 
@@ -1422,11 +1737,13 @@ const MINI_APP_HTML = `
     async function loadDashboardData() {
       showSkeleton('items-container', 3);
       try {
+        const prevMonthKey = persianMonthKeyOfShifted(-1);
         const results = await Promise.all([
           fetch(BASE_URL + '/api/transactions?userId=' + currentUserId),
           fetch(BASE_URL + '/api/summary?userId=' + currentUserId),
           fetch(BASE_URL + '/api/budgets?userId=' + currentUserId),
-          fetch(BASE_URL + '/api/installments?userId=' + currentUserId)
+          fetch(BASE_URL + '/api/installments?userId=' + currentUserId),
+          fetch(BASE_URL + '/api/transactions?userId=' + currentUserId + '&month=' + prevMonthKey)
         ]);
         records = await results[0].json();
         if (!Array.isArray(records)) records = [];
@@ -1435,6 +1752,8 @@ const MINI_APP_HTML = `
         budgetLimits = (budgetData && budgetData.limits) || {};
         const instData = await results[3].json();
         installments = Array.isArray(instData) ? instData : [];
+        previousMonthRecords = await results[4].json();
+        if (!Array.isArray(previousMonthRecords)) previousMonthRecords = [];
         renderDashboard();
       } catch (err) {
         document.getElementById('items-container').innerHTML = '';
@@ -1522,10 +1841,23 @@ const MINI_APP_HTML = `
     }
 
     function persianMonthKeyOf(dateInput) {
-      const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric' }).formatToParts(new Date(dateInput));
+      const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date(dateInput));
       const map = {};
       parts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = p.value; });
-      return map.year + '-' + map.month;
+      return map.year + '-' + String(map.month).padStart(2, '0');
+    }
+
+    // کلید ماه شمسی N ماه قبل/بعد از امروز (delta منفی = گذشته)، فرمت "YYYY-MM" هم‌راستا با کلیدهای بک‌اند
+    // (این تابع منطق shiftMonthKey سمت بک‌اند را برای فرانت‌اند تکرار می‌کند - قالب فرانت‌اند
+    // نمی‌تواند توابع بک‌اند را صدا بزند، چون در محیط اجرایی جدایی (مرورگر) اجرا می‌شود)
+    function persianMonthKeyOfShifted(delta) {
+      const todayParts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date());
+      const map = {};
+      todayParts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = parseInt(p.value, 10); });
+      let y = map.year, m = map.month + delta;
+      while (m > 12) { m -= 12; y += 1; }
+      while (m < 1) { m += 12; y -= 1; }
+      return y + '-' + String(m).padStart(2, '0');
     }
 
     function computeCategorySpending() {
@@ -1633,7 +1965,7 @@ const MINI_APP_HTML = `
 
     function computeStreak() {
       const days = new Set();
-      records.forEach(function(r) {
+      records.concat(previousMonthRecords).forEach(function(r) {
         days.add(new Date(r.date).toLocaleDateString('en-US-u-ca-persian'));
       });
       let cursor = new Date();
@@ -1693,6 +2025,114 @@ const MINI_APP_HTML = `
         },
         options: { cutout: '75%', plugins: { legend: { display: false } } }
       });
+    }
+
+    let reportsChartInstance = null;
+    let lastReportsData = null;
+
+    async function loadReportsData() {
+      try {
+        const res = await fetch(BASE_URL + '/api/reports?userId=' + currentUserId);
+        const data = await res.json();
+        lastReportsData = data;
+        renderReportsChart(data);
+      } catch (err) {
+        document.getElementById('reports-empty-state').classList.remove('hidden');
+        document.getElementById('reports-empty-state').textContent = t('loadErrDash');
+      }
+    }
+
+    function renderReportsChart(data) {
+      const cur = data.currentMonth;
+      const prev = data.previousMonth;
+      const forecast = data.forecast;
+
+      const hasAnyData = (cur.cumulativeIncome.some(function(v) { return v > 0; })) ||
+                          (cur.cumulativeExpense.some(function(v) { return v > 0; })) ||
+                          (prev.cumulativeIncome.some(function(v) { return v > 0; })) ||
+                          (prev.cumulativeExpense.some(function(v) { return v > 0; }));
+      document.getElementById('reports-empty-state').classList.toggle('hidden', hasAnyData);
+      document.getElementById('reports-empty-state').textContent = t('reportsNoDataYet');
+      document.getElementById('reports-chart-wrap').classList.toggle('hidden', !hasAnyData);
+
+      const labels = [];
+      const maxLen = Math.max(cur.totalDays, prev.totalDays);
+      for (let i = 1; i <= maxLen; i++) labels.push(String(i));
+
+      const padToLength = function(arr, len) {
+        const out = arr.slice();
+        while (out.length < len) out.push(null);
+        return out;
+      };
+
+      const ctx = document.getElementById('reportsChart').getContext('2d');
+      if (reportsChartInstance) reportsChartInstance.destroy();
+      reportsChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: t('reportsChartLegendIncome'),
+              data: padToLength(cur.cumulativeIncome, maxLen),
+              borderColor: '#10b981',
+              backgroundColor: 'transparent',
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendExpense'),
+              data: padToLength(cur.cumulativeExpense, maxLen),
+              borderColor: '#f43f5e',
+              backgroundColor: 'transparent',
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendIncomePrev'),
+              data: padToLength(prev.cumulativeIncome, maxLen),
+              borderColor: '#10b981',
+              backgroundColor: 'transparent',
+              borderDash: [4, 4],
+              borderWidth: 1,
+              tension: 0.3,
+              pointRadius: 0
+            },
+            {
+              label: t('reportsChartLegendExpensePrev'),
+              data: padToLength(prev.cumulativeExpense, maxLen),
+              borderColor: '#f43f5e',
+              backgroundColor: 'transparent',
+              borderDash: [4, 4],
+              borderWidth: 1,
+              tension: 0.3,
+              pointRadius: 0
+            }
+          ]
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#9ca3af', maxTicksLimit: 8 }, grid: { display: false } },
+            y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(156,163,175,0.1)' } }
+          },
+          interaction: { intersect: false, mode: 'index' }
+        }
+      });
+
+      document.getElementById('reports-forecast-income').textContent = fmtUsd(forecast.projectedIncome);
+      document.getElementById('reports-forecast-expense').textContent = fmtUsd(forecast.projectedExpense);
+      document.getElementById('reports-forecast-balance').textContent = fmtUsd(forecast.projectedBalance);
+
+      const prevExpenseTotal = prev.cumulativeExpense.length ? prev.cumulativeExpense[prev.cumulativeExpense.length - 1] : 0;
+      const vsLastMonthEl = document.getElementById('reports-vs-last-month');
+      if (prevExpenseTotal > 0) {
+        const pctChange = Math.round(((forecast.projectedExpense - prevExpenseTotal) / prevExpenseTotal) * 100);
+        const sign = pctChange > 0 ? '+' : '';
+        vsLastMonthEl.textContent = t('reportsVsLastMonth') + ': ' + sign + pctChange + '%';
+      } else {
+        vsLastMonthEl.textContent = '';
+      }
     }
 
     function setFilter(filter) {
@@ -1836,10 +2276,12 @@ const MINI_APP_HTML = `
       if (!amount) { alert(t('alertAmount')); return; }
 
       if (id) {
+        const existing = records.find(function(r) { return r.id === id; });
+        const monthKey = existing ? persianMonthKeyOf(existing.date) : persianMonthKeyOf(new Date());
         await fetch(BASE_URL + '/api/update', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ id: id, userId: currentUserId, description: description, amount: amount, type: type })
+          body: JSON.stringify({ id: id, userId: currentUserId, month: monthKey, description: description, amount: amount, type: type })
         });
       } else {
         await fetch(BASE_URL + '/api/add', {
@@ -1855,10 +2297,12 @@ const MINI_APP_HTML = `
 
     async function deleteItem(id) {
       if (!confirm(t('confirmDeleteTx'))) return;
+      const existing = records.find(function(r) { return r.id === id; });
+      const monthKey = existing ? persianMonthKeyOf(existing.date) : persianMonthKeyOf(new Date());
       await fetch(BASE_URL + '/api/delete', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ id: id, userId: currentUserId })
+        body: JSON.stringify({ id: id, userId: currentUserId, month: monthKey })
       });
       loadDashboardData();
     }
