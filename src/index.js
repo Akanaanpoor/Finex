@@ -1366,6 +1366,7 @@ const MINI_APP_HTML = `
 
     let activeMainTab = 'dashboard';
     let records = [];
+    let previousMonthRecords = [];
     let installments = [];
     let summary = null;
     let budgetLimits = {};
@@ -1546,11 +1547,13 @@ const MINI_APP_HTML = `
     async function loadDashboardData() {
       showSkeleton('items-container', 3);
       try {
+        const prevMonthKey = persianMonthKeyOfShifted(-1);
         const results = await Promise.all([
           fetch(BASE_URL + '/api/transactions?userId=' + currentUserId),
           fetch(BASE_URL + '/api/summary?userId=' + currentUserId),
           fetch(BASE_URL + '/api/budgets?userId=' + currentUserId),
-          fetch(BASE_URL + '/api/installments?userId=' + currentUserId)
+          fetch(BASE_URL + '/api/installments?userId=' + currentUserId),
+          fetch(BASE_URL + '/api/transactions?userId=' + currentUserId + '&month=' + prevMonthKey)
         ]);
         records = await results[0].json();
         if (!Array.isArray(records)) records = [];
@@ -1559,6 +1562,8 @@ const MINI_APP_HTML = `
         budgetLimits = (budgetData && budgetData.limits) || {};
         const instData = await results[3].json();
         installments = Array.isArray(instData) ? instData : [];
+        previousMonthRecords = await results[4].json();
+        if (!Array.isArray(previousMonthRecords)) previousMonthRecords = [];
         renderDashboard();
       } catch (err) {
         document.getElementById('items-container').innerHTML = '';
@@ -1649,7 +1654,20 @@ const MINI_APP_HTML = `
       const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric' }).formatToParts(new Date(dateInput));
       const map = {};
       parts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = p.value; });
-      return map.year + '-' + map.month;
+      return map.year + '-' + String(map.month).padStart(2, '0');
+    }
+
+    // کلید ماه شمسی N ماه قبل/بعد از امروز (delta منفی = گذشته)، فرمت "YYYY-MM" هم‌راستا با کلیدهای بک‌اند
+    // (این تابع منطق shiftMonthKey سمت بک‌اند را برای فرانت‌اند تکرار می‌کند - قالب فرانت‌اند
+    // نمی‌تواند توابع بک‌اند را صدا بزند، چون در محیط اجرایی جدایی (مرورگر) اجرا می‌شود)
+    function persianMonthKeyOfShifted(delta) {
+      const todayParts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric' }).formatToParts(new Date());
+      const map = {};
+      todayParts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = parseInt(p.value, 10); });
+      let y = map.year, m = map.month + delta;
+      while (m > 12) { m -= 12; y += 1; }
+      while (m < 1) { m += 12; y -= 1; }
+      return y + '-' + String(m).padStart(2, '0');
     }
 
     function computeCategorySpending() {
@@ -1757,7 +1775,7 @@ const MINI_APP_HTML = `
 
     function computeStreak() {
       const days = new Set();
-      records.forEach(function(r) {
+      records.concat(previousMonthRecords).forEach(function(r) {
         days.add(new Date(r.date).toLocaleDateString('en-US-u-ca-persian'));
       });
       let cursor = new Date();
@@ -1960,10 +1978,12 @@ const MINI_APP_HTML = `
       if (!amount) { alert(t('alertAmount')); return; }
 
       if (id) {
+        const existing = records.find(function(r) { return r.id === id; });
+        const monthKey = existing ? persianMonthKeyOf(existing.date) : persianMonthKeyOf(new Date());
         await fetch(BASE_URL + '/api/update', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ id: id, userId: currentUserId, description: description, amount: amount, type: type })
+          body: JSON.stringify({ id: id, userId: currentUserId, month: monthKey, description: description, amount: amount, type: type })
         });
       } else {
         await fetch(BASE_URL + '/api/add', {
@@ -1979,10 +1999,12 @@ const MINI_APP_HTML = `
 
     async function deleteItem(id) {
       if (!confirm(t('confirmDeleteTx'))) return;
+      const existing = records.find(function(r) { return r.id === id; });
+      const monthKey = existing ? persianMonthKeyOf(existing.date) : persianMonthKeyOf(new Date());
       await fetch(BASE_URL + '/api/delete', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ id: id, userId: currentUserId })
+        body: JSON.stringify({ id: id, userId: currentUserId, month: monthKey })
       });
       loadDashboardData();
     }
