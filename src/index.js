@@ -1563,6 +1563,7 @@ const MINI_APP_HTML = `
       populateCategorySelect();
       if (records.length || summary) renderDashboard();
       if (installments.length) renderInstallments();
+      if (activeMainTab === 'reports' && lastReportsData) renderReportsChart(lastReportsData);
     }
 
     function setLang(lang) {
@@ -1968,11 +1969,13 @@ const MINI_APP_HTML = `
     }
 
     let reportsChartInstance = null;
+    let lastReportsData = null;
 
     async function loadReportsData() {
       try {
         const res = await fetch(BASE_URL + '/api/reports?userId=' + currentUserId);
         const data = await res.json();
+        lastReportsData = data;
         renderReportsChart(data);
       } catch (err) {
         document.getElementById('reports-empty-state').classList.remove('hidden');
