@@ -1035,9 +1035,10 @@ const MINI_APP_HTML = `
       </div>
     </div>
 
-    <div class="grid grid-cols-3 app-surface-nav p-1 rounded-2xl border app-border-1 text-xs font-bold">
+    <div class="grid grid-cols-4 app-surface-nav p-1 rounded-2xl border app-border-1 text-xs font-bold">
       <button onclick="switchMainTab('dashboard')" id="nav-dash" class="tap py-2.5 rounded-xl bg-indigo-600 text-white transition shadow-lg">📊 <span data-i18n="navDashboard">داشبورد</span></button>
       <button onclick="switchMainTab('installments')" id="nav-inst" class="tap py-2.5 rounded-xl app-text-4 transition">🗓 <span data-i18n="navInstallments">اقساط</span></button>
+      <button onclick="switchMainTab('reports')" id="nav-reports" class="tap py-2.5 rounded-xl app-text-4 transition">📈 <span data-i18n="navReports">گزارشات</span></button>
       <button onclick="switchMainTab('about')" id="nav-about" class="tap py-2.5 rounded-xl app-text-4 transition">✨ <span data-i18n="navAbout">درباره</span></button>
     </div>
 
@@ -1157,6 +1158,41 @@ const MINI_APP_HTML = `
           <span id="inst-count" class="text-[11px] app-text-5">۰ مورد</span>
         </div>
         <div id="inst-container" class="space-y-2"></div>
+      </div>
+    </div>
+
+    <div id="tab-reports-view" class="space-y-4 hidden">
+      <div class="card-glass p-5 rounded-3xl fade-in">
+        <div class="text-xs font-bold app-text-4 uppercase tracking-wider mb-3" data-i18n="reportsTitle">روند درآمد و هزینه</div>
+        <div id="reports-empty-state" class="hidden text-center text-xs app-text-4 py-8" data-i18n="reportsNoDataYet">هنوز داده‌ای برای این ماه ثبت نشده.</div>
+        <div id="reports-chart-wrap" style="height: 220px;">
+          <canvas id="reportsChart"></canvas>
+        </div>
+        <div class="flex flex-wrap gap-3 mt-3 text-[10px] app-text-4">
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#10b981"></span><span data-i18n="reportsChartLegendIncome">درآمد (این ماه)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#f43f5e"></span><span data-i18n="reportsChartLegendExpense">هزینه (این ماه)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block opacity-50" style="background:#10b981"></span><span data-i18n="reportsChartLegendIncomePrev">درآمد (ماه قبل)</span></span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full inline-block opacity-50" style="background:#f43f5e"></span><span data-i18n="reportsChartLegendExpensePrev">هزینه (ماه قبل)</span></span>
+        </div>
+      </div>
+
+      <div class="card-glass p-5 rounded-3xl fade-in">
+        <div class="text-xs font-bold app-text-4 uppercase tracking-wider mb-3" data-i18n="reportsForecastTitle">پیش‌بینی ته ماه</div>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastIncome">درآمد</div>
+            <div id="reports-forecast-income" class="text-sm font-extrabold text-emerald-400 en-font mt-1">-</div>
+          </div>
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastExpense">هزینه</div>
+            <div id="reports-forecast-expense" class="text-sm font-extrabold text-rose-400 en-font mt-1">-</div>
+          </div>
+          <div>
+            <div class="text-[10px] app-text-4" data-i18n="reportsForecastBalance">موجودی</div>
+            <div id="reports-forecast-balance" class="text-sm font-extrabold app-text-1 en-font mt-1">-</div>
+          </div>
+        </div>
+        <div id="reports-vs-last-month" class="text-center text-[10px] app-text-4 mt-3"></div>
       </div>
     </div>
 
@@ -1325,7 +1361,12 @@ const MINI_APP_HTML = `
     const I18N = {
       fa: {
         accountLabel: 'حساب کاربری', addBtn: 'افزودن', themeLabel: 'پوسته', themeDark: 'تیره', themeLight: 'روشن',
-        langLabel: 'زبان', navDashboard: 'داشبورد', navInstallments: 'اقساط', navAbout: 'درباره',
+        langLabel: 'زبان', navDashboard: 'داشبورد', navInstallments: 'اقساط', navReports: 'گزارشات', navAbout: 'درباره',
+        reportsTitle: 'روند درآمد و هزینه', reportsNoDataYet: 'هنوز داده‌ای برای این ماه ثبت نشده.',
+        reportsChartLegendIncome: 'درآمد (این ماه)', reportsChartLegendExpense: 'هزینه (این ماه)',
+        reportsChartLegendIncomePrev: 'درآمد (ماه قبل)', reportsChartLegendExpensePrev: 'هزینه (ماه قبل)',
+        reportsForecastTitle: 'پیش‌بینی ته ماه', reportsForecastIncome: 'درآمد', reportsForecastExpense: 'هزینه', reportsForecastBalance: 'موجودی',
+        reportsVsLastMonth: 'نسبت به ماه قبل',
         netBalance: 'موجودی خالص', totalIncome: 'مجموع درآمد', totalExpense: 'مجموع هزینه',
         incomeShort: 'درآمد', expenseShort: 'هزینه',
         streakTitle: '🔥 استریک ثبت روزانه',
@@ -1377,7 +1418,12 @@ const MINI_APP_HTML = `
       },
       en: {
         accountLabel: 'Account', addBtn: 'Add', themeLabel: 'Theme', themeDark: 'Dark', themeLight: 'Light',
-        langLabel: 'Language', navDashboard: 'Dashboard', navInstallments: 'Installments', navAbout: 'About',
+        langLabel: 'Language', navDashboard: 'Dashboard', navInstallments: 'Installments', navReports: 'Reports', navAbout: 'About',
+        reportsTitle: 'Income & Expense Trend', reportsNoDataYet: 'No data recorded yet for this month.',
+        reportsChartLegendIncome: 'Income (this month)', reportsChartLegendExpense: 'Expense (this month)',
+        reportsChartLegendIncomePrev: 'Income (last month)', reportsChartLegendExpensePrev: 'Expense (last month)',
+        reportsForecastTitle: 'End-of-month forecast', reportsForecastIncome: 'Income', reportsForecastExpense: 'Expense', reportsForecastBalance: 'Balance',
+        reportsVsLastMonth: 'vs. last month',
         netBalance: 'Net Balance', totalIncome: 'Total Income', totalExpense: 'Total Expense',
         incomeShort: 'Income', expenseShort: 'Expense',
         streakTitle: '🔥 Daily Logging Streak',
@@ -1586,8 +1632,8 @@ const MINI_APP_HTML = `
       return base + ' #' + categoryId;
     }
 
-    const TAB_NAV_IDS = { dashboard: 'nav-dash', installments: 'nav-inst', about: 'nav-about' };
-    const TAB_VIEW_IDS = { dashboard: 'tab-dashboard-view', installments: 'tab-installments-view', about: 'tab-about-view' };
+    const TAB_NAV_IDS = { dashboard: 'nav-dash', installments: 'nav-inst', reports: 'nav-reports', about: 'nav-about' };
+    const TAB_VIEW_IDS = { dashboard: 'tab-dashboard-view', installments: 'tab-installments-view', reports: 'tab-reports-view', about: 'tab-about-view' };
 
     function switchMainTab(tab) {
       activeMainTab = tab;
@@ -1603,8 +1649,9 @@ const MINI_APP_HTML = `
         }
       });
       const addBtn = document.getElementById('top-add-btn');
-      addBtn.style.visibility = (tab === 'about') ? 'hidden' : 'visible';
+      addBtn.style.visibility = (tab === 'about' || tab === 'reports') ? 'hidden' : 'visible';
       if (tab === 'installments') loadInstallmentsData();
+      if (tab === 'reports') loadReportsData();
     }
 
     function handleTopAddButton() {
