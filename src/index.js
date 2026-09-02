@@ -45,10 +45,13 @@ export default {
         date: new Date().toISOString()
       };
 
-      const raw = await kv.get(`user_${userId}`);
+      await ensureMigrated(kv, userId);
+      const monthKey = monthKeyOf(new Date(newRecord.date));
+      const raw = await kv.get(`user_${userId}_${monthKey}`);
       let list = raw ? JSON.parse(raw) : [];
       list.unshift(newRecord);
-      await kv.put(`user_${userId}`, JSON.stringify(list));
+      await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+      await addMonthToIndex(kv, userId, monthKey);
 
       await saveUserIndex(kv, userId);
 
@@ -100,6 +103,7 @@ export default {
       try {
         const { userId, type, amount, description } = await request.json();
         const targetUser = userId || 'guest_user';
+        await ensureMigrated(kv, targetUser);
         const numAmount = parseFloat(String(amount).replace(/,/g, '')) || 0;
         const newRecord = {
           id: Date.now().toString(),
@@ -108,10 +112,12 @@ export default {
           description: (description || 'General').trim(),
           date: new Date().toISOString()
         };
-        const raw = await kv.get(`user_${targetUser}`);
+        const monthKey = monthKeyOf(new Date(newRecord.date));
+        const raw = await kv.get(`user_${targetUser}_${monthKey}`);
         let list = raw ? JSON.parse(raw) : [];
         list.unshift(newRecord);
-        await kv.put(`user_${targetUser}`, JSON.stringify(list));
+        await kv.put(`user_${targetUser}_${monthKey}`, JSON.stringify(list));
+        await addMonthToIndex(kv, targetUser, monthKey);
         await saveUserIndex(kv, targetUser);
         return Response.json({ success: true, item: newRecord }, { headers: corsHeaders });
       } catch (err) {
