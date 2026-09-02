@@ -94,7 +94,8 @@ export default {
       try {
         await ensureMigrated(kv, userId);
         const requestedMonth = url.searchParams.get('month');
-        const monthKey = requestedMonth || monthKeyOf(new Date());
+        const isValidMonthParam = requestedMonth && (/^\d{4}-\d{2}$/.test(requestedMonth) || requestedMonth === 'unknown-date');
+        const monthKey = isValidMonthParam ? requestedMonth : monthKeyOf(new Date());
         const raw = await kv.get(`user_${userId}_${monthKey}`);
         return Response.json(raw ? JSON.parse(raw) : [], { headers: corsHeaders });
       } catch (err) {
@@ -132,11 +133,26 @@ export default {
       try {
         const { id, userId, month } = await request.json();
         await ensureMigrated(kv, userId);
-        const monthKey = month || monthKeyOf(new Date());
-        const raw = await kv.get(`user_${userId}_${monthKey}`);
-        let list = raw ? JSON.parse(raw) : [];
-        list = list.filter(item => item.id !== id);
-        await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+        const baseMonthKey = month || monthKeyOf(new Date());
+        // اول در ماه اعلام‌شده توسط کلاینت جست‌وجو کن؛ اگر پیدا نشد (مثلاً به‌خاطر یک
+        // کلید ماه قدیمی/نادرست در سمت کلاینت) دو ماه همسایه را هم به‌عنوان راه‌حل
+        // پشتیبان امتحان کن، قبل از این‌که واقعاً شکست را گزارش کنیم.
+        const candidateMonths = [baseMonthKey, shiftMonthKey(baseMonthKey, 1), shiftMonthKey(baseMonthKey, -1)];
+        let found = false;
+        for (const monthKey of candidateMonths) {
+          const raw = await kv.get(`user_${userId}_${monthKey}`);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const filtered = list.filter(item => item.id !== id);
+          if (filtered.length !== list.length) {
+            await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(filtered));
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return Response.json({ success: false, error: 'Transaction not found' }, { status: 404, headers: corsHeaders });
+        }
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
         return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
@@ -147,13 +163,25 @@ export default {
       try {
         const { id, amount, description, type, userId, month } = await request.json();
         await ensureMigrated(kv, userId);
-        const monthKey = month || monthKeyOf(new Date());
-        const raw = await kv.get(`user_${userId}_${monthKey}`);
-        let list = raw ? JSON.parse(raw) : [];
-        const idx = list.findIndex(item => item.id === id);
-        if (idx !== -1) {
-          list[idx] = { ...list[idx], amount: Math.abs(parseFloat(amount) || 0), description, type };
-          await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+        const baseMonthKey = month || monthKeyOf(new Date());
+        // اول در ماه اعلام‌شده توسط کلاینت جست‌وجو کن؛ اگر پیدا نشد دو ماه همسایه را هم
+        // امتحان کن (نگاه کن به توضیح مشابه در /api/delete بالا).
+        const candidateMonths = [baseMonthKey, shiftMonthKey(baseMonthKey, 1), shiftMonthKey(baseMonthKey, -1)];
+        let found = false;
+        for (const monthKey of candidateMonths) {
+          const raw = await kv.get(`user_${userId}_${monthKey}`);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const idx = list.findIndex(item => item.id === id);
+          if (idx !== -1) {
+            list[idx] = { ...list[idx], amount: Math.abs(parseFloat(amount) || 0), description, type };
+            await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return Response.json({ success: false, error: 'Transaction not found' }, { status: 404, headers: corsHeaders });
         }
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
@@ -660,7 +688,11 @@ async function ensureMigrated(kv, userId) {
 
   const legacyRaw = await kv.get(`user_${userId}`);
   if (!legacyRaw) {
-    await kv.put(`user_index_${userId}`, JSON.stringify([]));
+    // شاید داده‌ی این کاربر قبلاً به کلیدهای ماهانه مهاجرت کرده اما ایندکس ثبت نشده
+    // (مثلاً یک اجرای قبلی که کلید قدیمی را حذف کرده بود). قبل از نوشتن ایندکس خالی،
+    // کلیدهای ماهانه‌ی موجود را پیدا و ایندکس را از روی آن‌ها بازسازی کن.
+    const rebuiltMonths = await listExistingMonthKeys(kv, userId);
+    await kv.put(`user_index_${userId}`, JSON.stringify(rebuiltMonths));
     return;
   }
 
@@ -671,6 +703,7 @@ async function ensureMigrated(kv, userId) {
   } catch (e) {
     // داده‌ی قدیمی خراب/غیرقابل‌خواندن است: کلید قدیمی را دست‌نخورده نگه می‌داریم
     // (برای بازیابی دستی بعدی) و فقط با ایندکس خالی کار برنامه را ادامه می‌دهیم.
+    console.error(`ensureMigrated: corrupt legacy JSON for userId=${userId}, continuing with empty index`);
     await kv.put(`user_index_${userId}`, JSON.stringify([]));
     return;
   }
@@ -696,7 +729,32 @@ async function ensureMigrated(kv, userId) {
     await kv.put(`user_${userId}_${mKey}`, JSON.stringify(byMonth[mKey]));
   }
   await kv.put(`user_index_${userId}`, JSON.stringify(monthKeys));
-  await kv.delete(`user_${userId}`);
+  // نکته: کلید قدیمی (user_{userId}) عمداً حذف نمی‌شود. حذف نکردن آن باعث می‌شود
+  // اجرای هم‌زمان این تابع برای همان کاربر (که در KV بدون تراکنش/قفل رخ می‌دهد) کاملاً
+  // idempotent بماند: هر اجرای هم‌زمان همان داده‌ی قدیمی را می‌خواند و همان نتیجه را
+  // می‌نویسد، پس رقابت بین دو نویسنده دیگر باعث گم‌شدن داده نمی‌شود. این کلید هم‌چنین
+  // به‌عنوان یک نسخه‌ی پشتیبان برای rollback احتمالی باقی می‌ماند.
+  console.log(`ensureMigrated: migrated userId=${userId}, records=${legacyList.length}, months=${monthKeys.length}`);
+  if (byMonth['unknown-date']) {
+    console.log(`ensureMigrated: userId=${userId} has ${byMonth['unknown-date'].length} record(s) with unparsable dates, bucketed under 'unknown-date'`);
+  }
+}
+
+// پیدا کردن کلیدهای ماهانه‌ی موجود یک کاربر در KV (با صفحه‌بندی) و برگرداندن نام ماه‌ها
+// به‌صورت آرایه‌ی مرتب‌شده. برای بازسازی ایندکس وقتی خودِ ایندکس گم شده استفاده می‌شود.
+async function listExistingMonthKeys(kv, userId) {
+  const prefix = `user_${userId}_`;
+  const months = [];
+  let cursor;
+  do {
+    const page = await kv.list({ prefix, cursor });
+    for (const key of page.keys) {
+      months.push(key.name.slice(prefix.length));
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  months.sort();
+  return months;
 }
 
 function convertPersianDigits(str) {
@@ -715,7 +773,7 @@ function getPersianFormattedDate(date) {
 
 // استخراج سال/ماه/روز شمسی به‌صورت عددی (لاتین) برای محاسبات داخلی
 function toPersianDate(date) {
-  const fmt = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric' });
+  const fmt = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'Asia/Tehran' });
   const parts = fmt.formatToParts(date);
   const map = {};
   for (const p of parts) {
@@ -786,7 +844,7 @@ function bucketDaily(records, totalDays) {
   for (const r of records) {
     const day = toPersianDate(new Date(r.date)).day;
     const idx = day - 1;
-    if (idx < 0 || idx >= totalDays) continue;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= totalDays) continue;
     const amt = Number(r.amount) || 0;
     if (r.type === 'income') dailyIncome[idx] += amt;
     else if (r.type === 'expense') dailyExpense[idx] += amt;
@@ -1181,15 +1239,15 @@ const MINI_APP_HTML = `
         <div class="grid grid-cols-3 gap-2 text-center">
           <div>
             <div class="text-[10px] app-text-4" data-i18n="reportsForecastIncome">درآمد</div>
-            <div id="reports-forecast-income" class="text-sm font-extrabold text-emerald-400 en-font mt-1">-</div>
+            <div id="reports-forecast-income" class="amount-sensitive text-sm font-extrabold text-emerald-400 en-font mt-1">-</div>
           </div>
           <div>
             <div class="text-[10px] app-text-4" data-i18n="reportsForecastExpense">هزینه</div>
-            <div id="reports-forecast-expense" class="text-sm font-extrabold text-rose-400 en-font mt-1">-</div>
+            <div id="reports-forecast-expense" class="amount-sensitive text-sm font-extrabold text-rose-400 en-font mt-1">-</div>
           </div>
           <div>
             <div class="text-[10px] app-text-4" data-i18n="reportsForecastBalance">موجودی</div>
-            <div id="reports-forecast-balance" class="text-sm font-extrabold app-text-1 en-font mt-1">-</div>
+            <div id="reports-forecast-balance" class="amount-sensitive text-sm font-extrabold app-text-1 en-font mt-1">-</div>
           </div>
         </div>
         <div id="reports-vs-last-month" class="text-center text-[10px] app-text-4 mt-3"></div>
@@ -1662,6 +1720,7 @@ const MINI_APP_HTML = `
 
     function refreshCurrentTab() {
       if (activeMainTab === 'dashboard') loadDashboardData();
+      else if (activeMainTab === 'reports') loadReportsData();
       else loadInstallmentsData();
     }
 
@@ -1782,7 +1841,7 @@ const MINI_APP_HTML = `
     }
 
     function persianMonthKeyOf(dateInput) {
-      const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric' }).formatToParts(new Date(dateInput));
+      const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date(dateInput));
       const map = {};
       parts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = p.value; });
       return map.year + '-' + String(map.month).padStart(2, '0');
@@ -1792,7 +1851,7 @@ const MINI_APP_HTML = `
     // (این تابع منطق shiftMonthKey سمت بک‌اند را برای فرانت‌اند تکرار می‌کند - قالب فرانت‌اند
     // نمی‌تواند توابع بک‌اند را صدا بزند، چون در محیط اجرایی جدایی (مرورگر) اجرا می‌شود)
     function persianMonthKeyOfShifted(delta) {
-      const todayParts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric' }).formatToParts(new Date());
+      const todayParts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date());
       const map = {};
       todayParts.forEach(function(p) { if (p.type === 'year' || p.type === 'month') map[p.type] = parseInt(p.value, 10); });
       let y = map.year, m = map.month + delta;
@@ -1994,6 +2053,7 @@ const MINI_APP_HTML = `
                           (prev.cumulativeExpense.some(function(v) { return v > 0; }));
       document.getElementById('reports-empty-state').classList.toggle('hidden', hasAnyData);
       document.getElementById('reports-empty-state').textContent = t('reportsNoDataYet');
+      document.getElementById('reports-chart-wrap').classList.toggle('hidden', !hasAnyData);
 
       const labels = [];
       const maxLen = Math.max(cur.totalDays, prev.totalDays);
@@ -2060,9 +2120,9 @@ const MINI_APP_HTML = `
         }
       });
 
-      document.getElementById('reports-forecast-income').textContent = fmtToman(forecast.projectedIncome);
-      document.getElementById('reports-forecast-expense').textContent = fmtToman(forecast.projectedExpense);
-      document.getElementById('reports-forecast-balance').textContent = fmtToman(forecast.projectedBalance);
+      document.getElementById('reports-forecast-income').textContent = fmtUsd(forecast.projectedIncome);
+      document.getElementById('reports-forecast-expense').textContent = fmtUsd(forecast.projectedExpense);
+      document.getElementById('reports-forecast-balance').textContent = fmtUsd(forecast.projectedBalance);
 
       const prevExpenseTotal = prev.cumulativeExpense.length ? prev.cumulativeExpense[prev.cumulativeExpense.length - 1] : 0;
       const vsLastMonthEl = document.getElementById('reports-vs-last-month');

@@ -98,8 +98,9 @@ Use `type=income` for a second shortcut to log income. `<your-telegram-id>` is y
 - `expense - 50 - Lunch` or `income - 2500 - Salary` — log a transaction
 - `گزارش` or `/report` — get an instant financial summary, including this month's pending installments and the projected balance after paying them
 
-**In the Mini App** (three tabs):
+**In the Mini App** (four tabs):
 - **Dashboard** — balance, income/expense breakdown, financial forecast, category budgets, streak & badges, transaction list
+- **Reports** — monthly income/expense trend chart vs. the previous month, plus an end-of-month forecast
 - **Installments** — add/edit/delete installments, mark one as paid, see which are due this month
 - **About** — feature list and author credit
 
