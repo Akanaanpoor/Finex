@@ -276,10 +276,13 @@ export default {
           date: new Date().toISOString()
         };
 
-        const rawTx = await kv.get(`user_${userId}`);
+        await ensureMigrated(kv, userId);
+        const txMonthKey = monthKeyOf(new Date(txRecord.date));
+        const rawTx = await kv.get(`user_${userId}_${txMonthKey}`);
         let txList = rawTx ? JSON.parse(rawTx) : [];
         txList.unshift(txRecord);
-        await kv.put(`user_${userId}`, JSON.stringify(txList));
+        await kv.put(`user_${userId}_${txMonthKey}`, JSON.stringify(txList));
+        await addMonthToIndex(kv, userId, txMonthKey);
         await kv.put(`installments_${userId}`, JSON.stringify(instList));
         await upsertInstallmentIndex(kv, userId, inst);
 
@@ -372,10 +375,13 @@ export default {
             date: new Date().toISOString()
           };
 
-          const raw = await kv.get(`user_${userId}`);
+          await ensureMigrated(kv, userId);
+          const txMonthKey = monthKeyOf(new Date(newRecord.date));
+          const raw = await kv.get(`user_${userId}_${txMonthKey}`);
           let userTransactions = raw ? JSON.parse(raw) : [];
           userTransactions.unshift(newRecord);
-          await kv.put(`user_${userId}`, JSON.stringify(userTransactions));
+          await kv.put(`user_${userId}_${txMonthKey}`, JSON.stringify(userTransactions));
+          await addMonthToIndex(kv, userId, txMonthKey);
           await saveUserIndex(kv, userId);
 
           const persianDate = getPersianFormattedDate(new Date());
