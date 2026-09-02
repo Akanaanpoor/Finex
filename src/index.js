@@ -92,7 +92,10 @@ export default {
     if (url.pathname === '/api/transactions' && request.method === 'GET') {
       const userId = url.searchParams.get('userId') || 'guest_user';
       try {
-        const raw = await kv.get(`user_${userId}`);
+        await ensureMigrated(kv, userId);
+        const requestedMonth = url.searchParams.get('month');
+        const monthKey = requestedMonth || monthKeyOf(new Date());
+        const raw = await kv.get(`user_${userId}_${monthKey}`);
         return Response.json(raw ? JSON.parse(raw) : [], { headers: corsHeaders });
       } catch (err) {
         return Response.json([], { headers: corsHeaders });
@@ -127,11 +130,13 @@ export default {
 
     if (url.pathname === '/api/delete' && request.method === 'POST') {
       try {
-        const { id, userId } = await request.json();
-        const raw = await kv.get(`user_${userId}`);
+        const { id, userId, month } = await request.json();
+        await ensureMigrated(kv, userId);
+        const monthKey = month || monthKeyOf(new Date());
+        const raw = await kv.get(`user_${userId}_${monthKey}`);
         let list = raw ? JSON.parse(raw) : [];
         list = list.filter(item => item.id !== id);
-        await kv.put(`user_${userId}`, JSON.stringify(list));
+        await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
         return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
@@ -140,13 +145,15 @@ export default {
 
     if (url.pathname === '/api/update' && request.method === 'POST') {
       try {
-        const { id, amount, description, type, userId } = await request.json();
-        const raw = await kv.get(`user_${userId}`);
+        const { id, amount, description, type, userId, month } = await request.json();
+        await ensureMigrated(kv, userId);
+        const monthKey = month || monthKeyOf(new Date());
+        const raw = await kv.get(`user_${userId}_${monthKey}`);
         let list = raw ? JSON.parse(raw) : [];
         const idx = list.findIndex(item => item.id === id);
         if (idx !== -1) {
           list[idx] = { ...list[idx], amount: Math.abs(parseFloat(amount) || 0), description, type };
-          await kv.put(`user_${userId}`, JSON.stringify(list));
+          await kv.put(`user_${userId}_${monthKey}`, JSON.stringify(list));
         }
         return Response.json({ success: true }, { headers: corsHeaders });
       } catch (err) {
