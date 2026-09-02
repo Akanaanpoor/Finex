@@ -714,18 +714,24 @@ async function sendTelegramMessage(token, chatId, htmlText, webAppUrl) {
   });
 }
 
-// موجودی فعلی + اقساط باقیمانده‌ی این ماه + موجودی پیش‌بینی‌شده پس از پرداخت آن‌ها
+// موجودی فعلی (جمع تمام تاریخچه‌ی کاربر از روی ایندکس ماهانه) + اقساط باقیمانده‌ی این ماه
+// + موجودی پیش‌بینی‌شده پس از پرداخت آن‌ها
 async function computeSummary(kv, userId) {
-  const rawTx = await kv.get(`user_${userId}`);
+  await ensureMigrated(kv, userId);
+  const rawIndex = await kv.get(`user_index_${userId}`);
+  const monthKeys = rawIndex ? JSON.parse(rawIndex) : [];
   const rawInst = await kv.get(`installments_${userId}`);
-  const records = rawTx ? JSON.parse(rawTx) : [];
   const installments = rawInst ? JSON.parse(rawInst) : [];
 
   let income = 0, expense = 0;
-  for (const r of records) {
-    const amt = Number(r.amount) || 0;
-    if (r.type === 'income') income += amt;
-    else if (r.type === 'expense') expense += amt;
+  const monthlyRaws = await Promise.all(monthKeys.map(mKey => kv.get(`user_${userId}_${mKey}`)));
+  for (const raw of monthlyRaws) {
+    const monthRecords = raw ? JSON.parse(raw) : [];
+    for (const r of monthRecords) {
+      const amt = Number(r.amount) || 0;
+      if (r.type === 'income') income += amt;
+      else if (r.type === 'expense') expense += amt;
+    }
   }
   const balance = income - expense;
 
