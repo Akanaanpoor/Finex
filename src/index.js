@@ -523,6 +523,96 @@ async function removeFromInstallmentIndex(kv, userId, id) {
   } catch (e) {}
 }
 
+// کلید ماه شمسی یک تاریخ، به‌صورت "YYYY-MM" (برای نام‌گذاری کلیدهای KV تراکنش‌های ماهانه)
+function monthKeyOf(date) {
+  return cycleKey(toPersianDate(date));
+}
+
+// جابه‌جایی یک کلید ماه (YYYY-MM) به تعداد delta ماه (مثبت یا منفی)، با پوشش تغییر سال
+function shiftMonthKey(monthKey, delta) {
+  const parts = monthKey.split('-');
+  let y = parseInt(parts[0], 10);
+  let m = parseInt(parts[1], 10) + delta;
+  while (m > 12) { m -= 12; y += 1; }
+  while (m < 1) { m += 12; y -= 1; }
+  return y + '-' + String(m).padStart(2, '0');
+}
+
+// تعداد روزهای ماه شمسی‌ای که تاریخ داده‌شده در آن قرار دارد (۲۹ تا ۳۱، با پوشش سال کبیسه)
+// با پیمایش روز‌به‌روز حول تاریخ ورودی محاسبه می‌شود تا نیازی به پیاده‌سازی جداگانه‌ی قانون کبیسه‌ی شمسی نباشد
+function daysInPersianMonth(dateInThatMonth) {
+  const target = toPersianDate(dateInThatMonth);
+  // برگرد عقب تا روز اول همان ماه شمسی
+  let firstOfMonth = new Date(dateInThatMonth.getTime());
+  while (true) {
+    const prevDay = new Date(firstOfMonth.getTime() - 86400000);
+    const prevP = toPersianDate(prevDay);
+    if (prevP.month !== target.month || prevP.year !== target.year) break;
+    firstOfMonth = prevDay;
+  }
+  // از روز اول جلو بشمار تا ماه عوض شود
+  let count = 0;
+  let probe = firstOfMonth;
+  while (true) {
+    const p = toPersianDate(probe);
+    if (p.month !== target.month || p.year !== target.year) break;
+    count++;
+    probe = new Date(probe.getTime() + 86400000);
+  }
+  return count;
+}
+
+// افزودن یک کلید ماه به ایندکس ماه‌های کاربر (اگر از قبل نبود)، مرتب‌شده و بدون تکرار
+async function addMonthToIndex(kv, userId, monthKey) {
+  const raw = await kv.get(`user_index_${userId}`);
+  let months = raw ? JSON.parse(raw) : [];
+  if (!months.includes(monthKey)) {
+    months.push(monthKey);
+    months.sort();
+    await kv.put(`user_index_${userId}`, JSON.stringify(months));
+  }
+}
+
+// مهاجرت یک‌باره و ایمن از کلید قدیمی تک‌آرایه‌ای (user_{userId}) به کلیدهای ماهانه.
+// idempotent: اگر user_index_{userId} از قبل موجود باشد (حتی آرایه‌ی خالی)، بلافاصله برمی‌گردد
+// و هیچ کاری انجام نمی‌دهد - یعنی اجرای مکرر یا نیمه‌کاره هرگز داده را تکراری یا گم نمی‌کند.
+// کلید قدیمی فقط پس از موفقیت کامل نوشتن تمام کلیدهای ماهانه + ایندکس حذف می‌شود.
+async function ensureMigrated(kv, userId) {
+  const existingIndex = await kv.get(`user_index_${userId}`);
+  if (existingIndex !== null) return; // قبلاً مهاجرت شده
+
+  const legacyRaw = await kv.get(`user_${userId}`);
+  if (!legacyRaw) {
+    await kv.put(`user_index_${userId}`, JSON.stringify([]));
+    return;
+  }
+
+  let legacyList;
+  try {
+    legacyList = JSON.parse(legacyRaw);
+    if (!Array.isArray(legacyList)) legacyList = [];
+  } catch (e) {
+    // داده‌ی قدیمی خراب/غیرقابل‌خواندن است: کلید قدیمی را دست‌نخورده نگه می‌داریم
+    // (برای بازیابی دستی بعدی) و فقط با ایندکس خالی کار برنامه را ادامه می‌دهیم.
+    await kv.put(`user_index_${userId}`, JSON.stringify([]));
+    return;
+  }
+
+  const byMonth = {};
+  for (const record of legacyList) {
+    const mKey = monthKeyOf(new Date(record.date));
+    if (!byMonth[mKey]) byMonth[mKey] = [];
+    byMonth[mKey].push(record);
+  }
+
+  const monthKeys = Object.keys(byMonth).sort();
+  for (const mKey of monthKeys) {
+    await kv.put(`user_${userId}_${mKey}`, JSON.stringify(byMonth[mKey]));
+  }
+  await kv.put(`user_index_${userId}`, JSON.stringify(monthKeys));
+  await kv.delete(`user_${userId}`);
+}
+
 function convertPersianDigits(str) {
   return String(str)
     .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
