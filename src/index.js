@@ -333,6 +333,64 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/reports' && request.method === 'GET') {
+      const userId = url.searchParams.get('userId') || 'guest_user';
+      try {
+        await ensureMigrated(kv, userId);
+        const now = new Date();
+        const nowP = toPersianDate(now);
+        const currentKey = cycleKey(nowP);
+        const prevKey = shiftMonthKey(currentKey, -1);
+
+        const [currentRaw, prevRaw] = await Promise.all([
+          kv.get(`user_${userId}_${currentKey}`),
+          kv.get(`user_${userId}_${prevKey}`)
+        ]);
+        const currentRecords = currentRaw ? JSON.parse(currentRaw) : [];
+        const prevRecords = prevRaw ? JSON.parse(prevRaw) : [];
+
+        const daysElapsed = nowP.day;
+        const totalDaysCurrent = daysInPersianMonth(now);
+        const prevMonthProbeDate = new Date(now.getTime() - daysElapsed * 86400000);
+        const totalDaysPrev = daysInPersianMonth(prevMonthProbeDate);
+        const prevMonthLabel = PERSIAN_MONTHS[toPersianDate(prevMonthProbeDate).month - 1];
+
+        const currentBuckets = bucketDaily(currentRecords, daysElapsed);
+        const prevBuckets = bucketDaily(prevRecords, totalDaysPrev);
+
+        const incomeSoFar = daysElapsed > 0 ? currentBuckets.cumulativeIncome[daysElapsed - 1] : 0;
+        const expenseSoFar = daysElapsed > 0 ? currentBuckets.cumulativeExpense[daysElapsed - 1] : 0;
+        const projectedIncome = daysElapsed > 0 ? (incomeSoFar / daysElapsed) * totalDaysCurrent : 0;
+        const projectedExpense = daysElapsed > 0 ? (expenseSoFar / daysElapsed) * totalDaysCurrent : 0;
+
+        return Response.json({
+          currentMonth: {
+            label: PERSIAN_MONTHS[nowP.month - 1],
+            totalDays: daysElapsed,
+            dailyIncome: currentBuckets.dailyIncome,
+            dailyExpense: currentBuckets.dailyExpense,
+            cumulativeIncome: currentBuckets.cumulativeIncome,
+            cumulativeExpense: currentBuckets.cumulativeExpense
+          },
+          previousMonth: {
+            label: prevMonthLabel,
+            totalDays: totalDaysPrev,
+            dailyIncome: prevBuckets.dailyIncome,
+            dailyExpense: prevBuckets.dailyExpense,
+            cumulativeIncome: prevBuckets.cumulativeIncome,
+            cumulativeExpense: prevBuckets.cumulativeExpense
+          },
+          forecast: {
+            projectedIncome: Math.round(projectedIncome),
+            projectedExpense: Math.round(projectedExpense),
+            projectedBalance: Math.round(projectedIncome - projectedExpense)
+          }
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     // و) پردازش پیام‌های ورودی تلگرام
     if (request.method === 'POST') {
       try {
@@ -718,6 +776,31 @@ async function sendTelegramMessage(token, chatId, htmlText, webAppUrl) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
+}
+
+// گروه‌بندی روزانه‌ی یک لیست تراکنش بر اساس روز-از-ماه، به همراه سری تجمعی
+// totalDays طول آرایه‌های خروجی را تعیین می‌کند (برای ماه جاری: تا امروز، برای ماه قبل: کل ماه)
+function bucketDaily(records, totalDays) {
+  const dailyIncome = new Array(totalDays).fill(0);
+  const dailyExpense = new Array(totalDays).fill(0);
+  for (const r of records) {
+    const day = toPersianDate(new Date(r.date)).day;
+    const idx = day - 1;
+    if (idx < 0 || idx >= totalDays) continue;
+    const amt = Number(r.amount) || 0;
+    if (r.type === 'income') dailyIncome[idx] += amt;
+    else if (r.type === 'expense') dailyExpense[idx] += amt;
+  }
+  const cumulativeIncome = [];
+  const cumulativeExpense = [];
+  let ci = 0, ce = 0;
+  for (let i = 0; i < totalDays; i++) {
+    ci += dailyIncome[i];
+    ce += dailyExpense[i];
+    cumulativeIncome.push(ci);
+    cumulativeExpense.push(ce);
+  }
+  return { dailyIncome, dailyExpense, cumulativeIncome, cumulativeExpense };
 }
 
 // موجودی فعلی (جمع تمام تاریخچه‌ی کاربر از روی ایندکس ماهانه) + اقساط باقیمانده‌ی این ماه
