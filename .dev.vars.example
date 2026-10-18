@@ -2,3 +2,8 @@
 # `.dev.vars` is git-ignored — never commit real tokens.
 
 TELEGRAM_BOT_TOKEN=123456789:your-telegram-bot-token-from-botfather
+
+# Optional hardening (see README → "Security"). Leave unset to keep the old behaviour.
+# WEBHOOK_SECRET=any-long-random-string
+# SHORTCUT_SECRET=another-long-random-string
+# ENFORCE_AUTH=1
