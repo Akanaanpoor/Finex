@@ -24,3 +24,12 @@ crons = ["30 17 * * *"]
 
 # Secrets (NOT set here — see README):
 #   TELEGRAM_BOT_TOKEN  →  npx wrangler secret put TELEGRAM_BOT_TOKEN
+#
+# Optional hardening (all off by default so an upgrade never breaks existing users — see README → "Security"):
+#   WEBHOOK_SECRET      →  npx wrangler secret put WEBHOOK_SECRET   (then open /set-webhook once)
+#   SHORTCUT_SECRET     →  npx wrangler secret put SHORTCUT_SECRET  (iOS Shortcut URLs then need &token=…)
+#
+# Reject API calls that do not carry a valid Telegram Mini App session. Turn this on once users have
+# opened the updated Mini App at least once:
+# [vars]
+# ENFORCE_AUTH = "1"
